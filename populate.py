@@ -1,37 +1,119 @@
-
-import pandas as pd
+import csv
 import sqlite3
 
-# Connect to the SQLite database
-conn = sqlite3.connect('shipment_database.db')
-cursor = conn.cursor()
+class DatabaseConnector:
+    def __init__(self, database_file):
+        self.connection = sqlite3.connect(database_file)
+        self.cursor = self.connection.cursor()
 
+    def populate(self, spreadsheet_folder):
+         
+        with open(f"{spreadsheet_folder}/shipping_data_0.csv", "r") as spreadsheet_file_0:
+            with open(f"{spreadsheet_folder}/shipping_data_1.csv", "r") as spreadsheet_file_1:
+                with open(f"{spreadsheet_folder}/shipping_data_2.csv", "r") as spreadsheet_file_2:
+                     
+                    csv_reader_0 = csv.reader(spreadsheet_file_0)
+                    csv_reader_1 = csv.reader(spreadsheet_file_1)
+                    csv_reader_2 = csv.reader(spreadsheet_file_2)
+                    
+                    self.populate_first_shipping_data(csv_reader_0)
+                    self.populate_second_shipping_data(csv_reader_1, csv_reader_2)
 
-# Function to insert data into the table
-def insert_data(table, data):
-    placeholders = ', '.join('?' * len(data.columns))
-    columns = ', '.join(data.columns)
-    sql = f'INSERT INTO {table} ({columns}) VALUES ({placeholders})'
-    cursor.executemany(sql, data.values.tolist())
-    conn.commit()
+    def populate_first_shipping_data(self, csv_reader_0):
+         
+        for row_index, row in enumerate(csv_reader_0):
+           
+            if row_index > 0:
+                
+                product_name = row[2]
+                product_quantity = row[4]
+                origin = row[0]
+                destination = row[1]
+                # Insert the data into the database
+                self.insert_product_if_it_does_not_already_exist(product_name)
+                self.insert_shipment(product_name, product_quantity, origin, destination)
+                print(f"Inserted product {row_index} from shipping_data_0")
 
-# Load and insert data from shipping_data_0.csv
-data_0 = pd.read_csv('data/shipping_data_0.csv')
-insert_data('table_0', data_0)
+    def populate_second_shipping_data(self, csv_reader_1, csv_reader_2):
+         
+        shipment_info = {}
+        
+        
+        for row_index, row in enumerate(csv_reader_2):
+             
+            if row_index > 0:
+                 
+                shipment_identifier = row[0]
+                origin = row[1]
+                destination = row[2]
+                 
+                shipment_info[shipment_identifier] = {
+                    "origin": origin,
+                    "destination": destination,
+                    "products": {}
+                }
+        
+        # Read product data from shipping_data_1
+        for row_index, row in enumerate(csv_reader_1):
+             
+            if row_index > 0:
+                 
+                shipment_identifier = row[0]
+                product_name = row[1]
+                 
+                products = shipment_info[shipment_identifier]["products"]
+                if products.get(product_name, None) is None:
+                    products[product_name] = 1
+                else:
+                    products[product_name] += 1
 
-# Load data from shippint_data_1.csv and shippint_data_2.csv
-data_1 = pd.read_csv('data/shipping_data_1.csv')
-data_2 = pd.read_csv('data/shipping_data_2.csv')
+        # Insert the data into the database
+        count = 0
+        for shipment_identifier, shipment in shipment_info.items():
+             
+            origin = shipment["origin"]
+            destination = shipment["destination"]
+            for product_name, product_quantity in shipment["products"].items():
+                # Insert products into the database
+                self.insert_product_if_it_does_not_already_exist(product_name)
+                self.insert_shipment(product_name, product_quantity, origin, destination)
+                
+                print(f"Inserted product {count} from shipping_data_1")
+                count += 1
 
-# Merge data_1 and data_2 on shipping_identifier
-merged_data = pd.merge(data_1, data_2, on='shipping_identifier')
+    def insert_product_if_it_does_not_already_exist(self, product_name):
+        '''Insert a new product into the database if it does not already exist.'''
+        query = """
+        INSERT OR IGNORE INTO product (name)
+        VALUES (?);
+        """
+        self.cursor.execute(query, (product_name,))
+        self.connection.commit()
 
-grouped_data = merged_data.groupby(['shipping_identifier', 'product_name', 'origin', 'destination']).agg({
-    'quantity': 'sum'
-}).reset_index()
+    def insert_shipment(self, product_name, product_quantity, origin, destination):
+        '''Insert a new shipment into the database.'''
+        # Collect the product id
+        query = """
+        SELECT id FROM product WHERE name = ?;
+        """
+        self.cursor.execute(query, (product_name,))
+        product_id = self.cursor.fetchone()[0]
+        # Insert the shipment
+        query = """
+        INSERT OR IGNORE INTO shipment (product_id, quantity, origin, destination)
+        VALUES (?, ?, ?, ?);
+        """
+        self.cursor.execute(query, (product_id, product_quantity, origin, destination))
+        self.connection.commit()
 
-# Insert the merged and transformed data into the database
-insert_data('shipment_database', grouped_data)
+    def close(self):
+        '''Close the database connection.'''
+        self.connection.close()
 
-# Close the database connection
-conn.close()
+if __name__ == '__main__':
+    # Create a DatabaseConnector object
+    database_connector = DatabaseConnector("shipment_database.db")
+    # Populate the database with the data from the spreadsheet
+    database_connector.populate("./data")
+    # Close the database connection
+    database_connector.close()
